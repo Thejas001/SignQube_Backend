@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SIGNQUE Admin</title>
+    <link rel="stylesheet" href="/admin/styles.css?v=20260728b" />
+  </head>
+  <body>
+    <div id="auth-screen" class="auth-screen">
+      <div class="auth-card">
+        <p class="kicker">SIGNQUE</p>
+        <h1>Admin Login</h1>
+        <p class="auth-copy">Sign in to manage orders, products, and store activity from one simple workspace.</p>
+        <form id="login-form" class="auth-form">
+          <label>
+            <span>Email</span>
+            <input id="login-email" type="email" value="admin@signqube.com" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="login-password" type="password" value="admin123" required />
+          </label>
+          <button type="submit" class="primary-button wide-button">Login</button>
+        </form>
+        <p id="auth-message" class="auth-message hidden"></p>
+      </div>
+    </div>
+
+    <div id="app-shell" class="shell hidden">
+      <aside id="sidebar" class="sidebar collapsed">
+        <div class="brand">
+          <div class="brand-mark">S</div>
+          <div class="brand-copy sidebar-expand-only">
+            <strong>SIGNQUE Admin</strong>
+            <span>Control center</span>
+          </div>
+        </div>
+
+        <nav class="nav">
+          <button class="nav-link active" data-view-target="orders">
+            <span class="nav-icon">O</span>
+            <span class="sidebar-expand-only">Orders</span>
+          </button>
+          <button class="nav-link" data-view-target="overview">
+            <span class="nav-icon">I</span>
+            <span class="sidebar-expand-only">Insights</span>
+          </button>
+          <button class="nav-link" data-view-target="products">
+            <span class="nav-icon">P</span>
+            <span class="sidebar-expand-only">Products</span>
+          </button>
+          <button class="nav-link" data-view-target="product-form">
+            <span class="nav-icon">+</span>
+            <span class="sidebar-expand-only">Product Setup</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="profile-card sidebar-expand-only">
+            <strong>Super Admin</strong>
+            <span>Admin workspace</span>
+          </div>
+          <button id="swagger-button" class="ghost-button wide-button sidebar-expand-only">API Docs</button>
+          <div class="sidebar-status sidebar-expand-only">
+            <span class="status-dot"></span>
+            <span>Online</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <header class="topbar">
+          <div class="topbar-left">
+            <div class="topbar-title">
+              <strong>Admin Dashboard</strong>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <button id="refresh-dashboard" class="ghost-button">Refresh</button>
+            <button id="logout-button" class="ghost-button">Sign Out</button>
+          </div>
+        </header>
+
+        <section id="feedback" class="feedback hidden"></section>
+
+        <section class="view" data-view="overview">
+          <div class="section-intro">
+            <div>
+              <h3>Store insights</h3>
+              <p class="muted">A quick read on revenue, order activity, and current order mix.</p>
+            </div>
+          </div>
+          <div id="metrics-grid" class="metrics-grid"></div>
+
+          <div class="panel-grid">
+            <article class="panel">
+              <div class="panel-head">
+                <h3>Sales Trend</h3>
+                <span>Last 7 days</span>
+              </div>
+              <div id="sales-chart" class="bar-chart"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>Status Breakdown</h3>
+                <span>Live order mix</span>
+              </div>
+              <div id="status-breakdown" class="status-stack"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view active" data-view="orders">
+          <div class="orders-page">
+            <div class="hero-copy orders-heading">
+              <h1 id="page-title">Orders</h1>
+              <p id="page-description" class="hero-description">
+                Track incoming orders, review activity, and manage the store from one place.
+              </p>
+            </div>
+            <div class="toolbar order-toolbar">
+              <div class="toolbar-row">
+                <select id="order-payment-filter">
+                  <option value="ALL">All Payment Methods</option>
+                  <option value="UPI">UPI</option>
+                  <option value="CARD">Card</option>
+                  <option value="COD">COD</option>
+                </select>
+                <select id="order-status-filter">
+                  <option value="ALL">All Status</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="PROCESSING">Processing</option>
+                  <option value="SHIPPED">Shipped</option>
+                  <option value="DELIVERED">Delivered</option>
+                  <option value="CANCELLED">Cancelled</option>
+                </select>
+              </div>
+              <input id="order-search" type="search" placeholder="Search order, name, or email" />
+            </div>
+            <div id="orders-summary" class="summary-strip hidden"></div>
+            <div class="orders-layout">
+              <div class="table-card order-table-card">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Order ID</th>
+                      <th>Date</th>
+                      <th>Total</th>
+                      <th>Payment</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="orders-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="pagination">
+              <button id="prev-page" class="ghost-button">Previous</button>
+              <div id="pagination-label" class="pagination-label"></div>
+              <button id="next-page" class="ghost-button">Next</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view="order-detail">
+          <div id="order-detail-panel" class="detail-page-shell"></div>
+        </section>
+
+        <section class="view" data-view="products">
+          <div class="products-page">
+            <div class="products-hero">
+              <div>
+                <h1 class="products-title">Product Management</h1>
+                <p class="hero-description">Manage your product catalog and storefront listings.</p>
+              </div>
+              <button id="new-product-button" class="primary-button products-new-button">+ New Product</button>
+            </div>
+            <div class="panel products-panel">
+              <div class="products-toolbar">
+                <input id="product-search" type="search" placeholder="Search catalog by ID, name, or description..." />
+              </div>
+              <div class="products-table-shell">
+                <div class="products-table-head">
+                  <div>Product</div>
+                  <div>UI Mode</div>
+                  <div>Listing</div>
+                  <div>Enabled</div>
+                  <div>Actions</div>
+                </div>
+                <div id="products-grid" class="products-list"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view="product-form">
+            <div class="panel form-panel">
+              <div class="panel-head stacked">
+                <div>
+                  <h3 id="product-form-title">Add New Product</h3>
+                  <span>Create catalog entry or edit existing one</span>
+                </div>
+                <span>Move step by step. Only one section open at time.</span>
+              </div>
+
+              <div id="product-config-summary" class="summary-strip product-summary"></div>
+              <div id="product-step-nav" class="form-step-nav">
+                <button type="button" class="step-chip active" data-step-target="basic">1. Basics</button>
+                <button type="button" class="step-chip" data-step-target="attributes">2. Attributes</button>
+                <button type="button" class="step-chip" data-step-target="pricing">3. Pricing</button>
+                <button type="button" class="step-chip" data-step-target="upload">4. Upload & Info</button>
+              </div>
+
+            <form id="product-form" class="product-form-shell">
+              <section class="config-section active" data-config-step="basic">
+                <div class="form-layout">
+                  <div class="section-head full">
+                    <h3>1. Basic product details</h3>
+                    <p>Start with the storefront information every product needs.</p>
+                  </div>
+                  <input id="product-id" type="hidden" />
+                  <label>
+                    <span>Title</span>
+                    <input id="product-title" name="title" required />
+                  </label>
+                  <label>
+                    <span>Base Price</span>
+                    <input id="product-price" name="basePrice" type="number" min="1" step="0.01" required />
+                  </label>
+                  <label class="full">
+                    <span>Product Image</span>
+                    <input id="product-image-upload" type="file" accept="image/*" />
+                    <input id="product-image" name="imageUrl" type="hidden" />
+                    <div id="product-image-status" class="field-note muted">
+                      Upload the main image that should represent this product.
+                    </div>
+                    <div id="product-image-preview" class="image-preview hidden"></div>
+                  </label>
+                  <label class="full">
+                    <span>Product Description</span>
+                    <textarea id="product-description" name="description" rows="5"></textarea>
+                  </label>
+                  <label class="toggle-field full">
+                    <span>Active product</span>
+                    <input id="product-active" name="isActive" type="checkbox" checked />
+                  </label>
+                </div>
+                <div class="step-actions">
+                  <button type="button" class="primary-button" data-step-next="attributes">Continue to Attributes</button>
+                </div>
+              </section>
+
+              <section class="config-section" data-config-step="attributes">
+              <div class="section-head">
+                <h3>2. Attributes &amp; Values</h3>
+                <p>Add all attributes first. Then pick one attribute and add its values.</p>
+              </div>
+              <div class="config-grid two-column">
+                <div>
+                  <label>
+                    <span>Add Attribute Name</span>
+                    <div class="inline-control">
+                      <input id="attribute-name-input" placeholder="Shape" />
+                      <button id="add-attribute-button" type="button" class="ghost-button">Add</button>
+                    </div>
+                  </label>
+                  <div id="attributes-list" class="stack-list"></div>
+                </div>
+                <div>
+                  <label>
+                    <span>Manage Values for Selected Attribute</span>
+                    <select id="attribute-select">
+                      <option value="">Select attribute</option>
+                    </select>
+                  </label>
+                  <div class="inline-control">
+                    <input id="attribute-value-input" placeholder="Matte" />
+                    <button id="add-attribute-value-button" type="button" class="ghost-button">Add</button>
+                  </div>
+                  <label class="check-line">
+                    <input id="pricing-relevant-checkbox" type="checkbox" />
+                    <span>Mark selected attribute as pricing-relevant</span>
+                  </label>
+                  <div id="attribute-values-list" class="stack-list muted"></div>
+                </div>
+              </div>
+              <div class="step-actions split">
+                <button type="button" class="ghost-button" data-step-prev="basic">Back</button>
+                <button type="button" class="primary-button" data-step-next="pricing">Continue to Pricing</button>
+              </div>
+              </section>
+
+              <section class="config-section" data-config-step="pricing">
+              <div class="section-head">
+                <h3>3. Pricing Rules</h3>
+                <p>Configure pricing only with attributes marked as pricing-relevant.</p>
+              </div>
+              <div class="info-box">
+                <strong>How Price Is Calculated</strong>
+                <div>Final price = Unit Price x Quantity x Pricing Factor</div>
+                <div>Example: 100 x 1 x 1 = 100</div>
+              </div>
+              <div id="pricing-summary" class="summary-box"></div>
+              <div id="pricing-health" class="health-box"></div>
+              <div class="form-layout single-column compact-gap">
+                <label>
+                  <span>Price Type</span>
+                  <select id="price-type-select">
+                    <option value="Flat">Flat</option>
+                    <option value="RuleBased">Rule Based</option>
+                  </select>
+                </label>
+              </div>
+              <div class="rule-list-head">
+                <strong>Rule List</strong>
+                <button id="add-pricing-rule-button" type="button" class="ghost-button">+ Add Rule</button>
+              </div>
+              <div id="pricing-rules-list" class="stack-list"></div>
+              <div class="step-actions split">
+                <button type="button" class="ghost-button" data-step-prev="attributes">Back</button>
+                <button type="button" class="primary-button" data-step-next="upload">Continue to Upload & Info</button>
+              </div>
+              </section>
+
+              <section class="config-section" data-config-step="upload">
+              <div class="section-head">
+                <h3>4. Upload Policy &amp; Info Items</h3>
+                <p>Configure upload requirements and customer-facing product info rows.</p>
+              </div>
+              <div class="config-grid two-column">
+                <div class="full-span">
+                  <span class="field-title">Is upload mandatory?</span>
+                  <div class="radio-row">
+                    <label class="check-line"><input type="radio" name="upload-mandatory" value="true" /> <span>Yes</span></label>
+                    <label class="check-line"><input type="radio" name="upload-mandatory" value="false" checked /> <span>No</span></label>
+                  </div>
+                </div>
+                <label>
+                  <span>Minimum uploads</span>
+                  <input id="min-uploads-input" type="number" min="0" value="0" />
+                </label>
+                <label>
+                  <span>Maximum uploads</span>
+                  <input id="max-uploads-input" type="number" min="0" value="0" />
+                </label>
+              </div>
+
+              <div class="config-card">
+                <label class="check-line">
+                  <input id="allow-customer-quantity-checkbox" type="checkbox" />
+                  <span>Allow customer to choose order quantity on storefront</span>
+                </label>
+                <div class="config-grid two-column">
+                  <label>
+                    <span>Minimum order quantity</span>
+                    <input id="min-order-quantity-input" type="number" min="1" value="1" />
+                  </label>
+                  <label>
+                    <span>Maximum order quantity</span>
+                    <input id="max-order-quantity-input" type="number" min="1" value="10" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="config-card">
+                <label class="check-line">
+                  <input id="show-description-box-checkbox" type="checkbox" />
+                  <span>Show custom description/instructions box on storefront</span>
+                </label>
+                <label class="check-line nested-check">
+                  <input id="description-required-checkbox" type="checkbox" />
+                  <span>Make this field required</span>
+                </label>
+                <div class="config-grid two-column">
+                  <label>
+                    <span>Field label</span>
+                    <input id="description-field-label-input" placeholder="Description / Instructions" />
+                  </label>
+                  <label>
+                    <span>Placeholder</span>
+                    <input id="description-placeholder-input" placeholder="Add any notes for production (optional)" />
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <span class="field-title">Allowed document types</span>
+                <div id="document-types-list" class="chip-grid"></div>
+              </div>
+
+              <div>
+                <div class="rule-list-head">
+                  <strong>Info Items</strong>
+                  <button id="add-info-item-button" type="button" class="ghost-button">+ Add Info Item</button>
+                </div>
+                <div id="info-items-list" class="stack-list"></div>
+              </div>
+
+              <div class="form-actions top-gap">
+                <button type="submit" class="primary-button">Save Product</button>
+                <button id="reset-product-form" type="button" class="ghost-button">Reset</button>
+              </div>
+              <div class="step-actions">
+                <button type="button" class="ghost-button" data-step-prev="pricing">Back</button>
+              </div>
+              </section>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/admin/app.js?v=20260728b"></script>
+  </body>
+</html>
