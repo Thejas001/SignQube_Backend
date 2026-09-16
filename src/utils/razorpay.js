@@ -81,6 +81,39 @@ async function createRazorpayOrder({ amountInPaise, receipt, notes }) {
   });
 }
 
+async function createPaymentLink({
+  amountInPaise,
+  description,
+  customerName,
+  customerContact,
+  referenceId,
+  notes,
+}) {
+  // Razorpay requires expire_by to be at least 15 minutes out.
+  const expiryMinutes = Math.max(env.razorpay.paymentLinkExpiryMinutes || 0, 16);
+
+  return sendRazorpayRequest("/v1/payment_links", {
+    amount: amountInPaise,
+    currency: env.razorpay.currency,
+    description,
+    reference_id: referenceId,
+    expire_by: Math.floor(Date.now() / 1000) + expiryMinutes * 60,
+    customer: {
+      name: customerName || undefined,
+      contact: customerContact || undefined,
+    },
+    notify: {
+      sms: false,
+      email: false,
+    },
+    notes,
+  });
+}
+
+async function cancelPaymentLink(paymentLinkId) {
+  return sendRazorpayRequest(`/v1/payment_links/${encodeURIComponent(paymentLinkId)}/cancel`, {});
+}
+
 function createHmacSignature(payload, secret) {
   return crypto.createHmac("sha256", secret).update(payload).digest("hex");
 }
@@ -110,6 +143,8 @@ function verifyRazorpayWebhookSignature(rawBody, receivedSignature) {
 
 module.exports = {
   createRazorpayOrder,
+  createPaymentLink,
+  cancelPaymentLink,
   getRazorpayConfig,
   verifyRazorpayPaymentSignature,
   verifyRazorpayWebhookSignature,

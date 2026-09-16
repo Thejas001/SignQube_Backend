@@ -6,6 +6,17 @@ const { signAccessToken, signRefreshToken } = require("../utils/jwt");
 const { parseExpiryToDate } = require("../utils/token");
 const env = require("../config/env");
 const crypto = require("crypto");
+const {
+  sendTextMessage,
+  sendTemplateMessage,
+  getServiceWindowClosesAt,
+  isWithinServiceWindow,
+} = require("../utils/whatsapp");
+const productEmbeddingService = require("./productEmbeddingService");
+const { invalidateCatalogContext } = require("./catalogContextService");
+const { computeStage, ORDER_DRAFT_KEYS } = require("./conversationStageService");
+const { TEST_PHONE_PREFIX, isTestConversation } = require("./customerMessagingService");
+const aiAgentService = require("./aiAgentService");
 
 function toNumber(value) {
   return value == null ? null : Number(value);
@@ -373,6 +384,11 @@ async function createProduct(payload) {
     },
   });
 
+  invalidateCatalogContext();
+  productEmbeddingService.regenerateEmbedding(product.id).catch((error) => {
+    console.error(`Failed to generate embedding for new product ${product.id}:`, error.message);
+  });
+
   return normalizeProduct(product);
 }
 
@@ -403,7 +419,222 @@ async function updateProduct(productId, payload) {
     },
   });
 
+  invalidateCatalogContext();
+
+  if (payload.title !== undefined || payload.description !== undefined || payload.attributes !== undefined) {
+    productEmbeddingService.regenerateEmbedding(product.id).catch((error) => {
+      console.error(`Failed to regenerate embedding for product ${product.id}:`, error.message);
+    });
+  }
+
   return normalizeProduct(product);
+}
+
+async function listConversations(filters = {}) {
+  // Dashboard test-chat sessions are kept out of the real customer list.
+  const customerOnly = { NOT: { waPhoneNumber: { startsWith: TEST_PHONE_PREFIX } } };
+  const where = { ...customerOnly };
+  const page = Math.max(Number(filters.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(filters.limit) || 20, 1), 50);
+  const skip = (page - 1) * limit;
+
+  if (filters.status && filters.status !== "ALL") {
+    where.status = filters.status;
+  }
+
+  if (filters.search) {
+    where.OR = [
+      { waPhoneNumber: { contains: filters.search, mode: "insensitive" } },
+      { waProfileName: { contains: filters.search, mode: "insensitive" } },
+    ];
+  }
+
+  const [totalItems, handoffCount, conversations] = await Promise.all([
+    prisma.conversation.count({ where }),
+    prisma.conversation.count({ where: { ...customerOnly, status: "HUMAN_HANDOFF" } }),
+    prisma.conversation.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      skip,
+      take: limit,
+      include: {
+        _count: { select: { messages: true } },
+      },
+    }),
+  ]);
+
+  return {
+    items: conversations.map((conversation) => ({
+      ...conversation,
+      messageCount: conversation._count.messages,
+    })),
+    pagination: {
+      page,
+      limit,
+      totalItems,
+      totalPages: Math.max(Math.ceil(totalItems / limit), 1),
+      hasNextPage: skip + conversations.length < totalItems,
+      hasPreviousPage: page > 1,
+    },
+    summary: {
+      handoffCount,
+    },
+  };
+}
+
+async function getConversationById(conversationId) {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      user: { select: { id: true, name: true, email: true, phone: true } },
+      messages: { orderBy: { createdAt: "asc" } },
+      orders: { orderBy: { createdAt: "desc" }, take: 10 },
+    },
+  });
+
+  if (!conversation) {
+    throw new AppError("Conversation not found", 404);
+  }
+
+  const serviceWindowClosesAt = getServiceWindowClosesAt(conversation.lastInboundAt);
+
+  return {
+    ...conversation,
+    serviceWindowClosesAt,
+    serviceWindowOpen: isTestConversation(conversation) || isWithinServiceWindow(conversation.lastInboundAt),
+    reengagementTemplateConfigured: Boolean(env.whatsapp.reengagementTemplate),
+  };
+}
+
+async function findConversationOrThrow(conversationId) {
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+
+  if (!conversation) {
+    throw new AppError("Conversation not found", 404);
+  }
+
+  return conversation;
+}
+
+async function takeoverConversation(conversationId) {
+  const conversation = await findConversationOrThrow(conversationId);
+
+  if (conversation.status === "HUMAN_HANDOFF") {
+    return conversation;
+  }
+
+  return prisma.conversation.update({
+    where: { id: conversationId },
+    data: { status: "HUMAN_HANDOFF", handoffReason: "Taken over by staff", handoffAt: new Date() },
+  });
+}
+
+async function resolveStageAfterHandoff(draft) {
+  if (!draft.orderId) {
+    return { status: await computeStage(draft), draftOrder: draft };
+  }
+
+  const order = await prisma.order.findUnique({
+    where: { id: draft.orderId },
+    include: { payments: true },
+  });
+
+  if (!order) {
+    return { status: await computeStage(draft), draftOrder: draft };
+  }
+
+  if (order.payments[0]?.status === "SUCCESS") {
+    return { status: "PAID", draftOrder: draft };
+  }
+
+  // The payment link expired or was cancelled while staff had the chat.
+  if (order.status === "CANCELLED") {
+    const nextDraft = { ...draft, expiredOrderNumber: order.orderNumber };
+    ORDER_DRAFT_KEYS.forEach((key) => delete nextDraft[key]);
+    return { status: await computeStage(nextDraft), draftOrder: nextDraft };
+  }
+
+  return { status: order.paymentMethod === "COD" ? "COMPLETED" : "PAYMENT_PENDING", draftOrder: draft };
+}
+
+async function releaseConversation(conversationId) {
+  const conversation = await findConversationOrThrow(conversationId);
+  const draft = conversation.draftOrder && typeof conversation.draftOrder === "object" ? conversation.draftOrder : {};
+  const { status, draftOrder } = await resolveStageAfterHandoff(draft);
+
+  const updated = await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { status, draftOrder, handoffReason: null, handoffAt: null },
+  });
+
+  // If the customer wrote after staff's last reply, let the agent answer it.
+  aiAgentService.scheduleConversationProcessing(conversationId).catch(() => {
+    // Already logged by the conversation queue.
+  });
+
+  return updated;
+}
+
+async function replyToConversation(conversationId, messageText) {
+  const conversation = await findConversationOrThrow(conversationId);
+
+  if (!isTestConversation(conversation)) {
+    if (!isWithinServiceWindow(conversation.lastInboundAt)) {
+      throw new AppError(
+        "The customer's 24-hour WhatsApp window is closed, so a free-form message can't be delivered. Send the re-engagement template and reply once they respond.",
+        409
+      );
+    }
+
+    await sendTextMessage(conversation.waPhoneNumber, messageText);
+  }
+
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      role: "ADMIN",
+      direction: "OUTBOUND",
+      content: messageText,
+    },
+  });
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { lastOutboundAt: new Date() },
+  });
+
+  return message;
+}
+
+async function reengageConversation(conversationId) {
+  const conversation = await findConversationOrThrow(conversationId);
+  const templateName = env.whatsapp.reengagementTemplate;
+
+  if (!templateName) {
+    throw new AppError("No re-engagement template is configured (WHATSAPP_REENGAGEMENT_TEMPLATE).", 400);
+  }
+
+  if (isTestConversation(conversation)) {
+    throw new AppError("Test conversations can't receive WhatsApp templates.", 400);
+  }
+
+  await sendTemplateMessage(conversation.waPhoneNumber, templateName, env.whatsapp.templateLanguage);
+
+  const message = await prisma.message.create({
+    data: {
+      conversationId,
+      role: "ADMIN",
+      direction: "OUTBOUND",
+      content: `[Sent re-engagement template "${templateName}"]`,
+    },
+  });
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { lastOutboundAt: new Date() },
+  });
+
+  return message;
 }
 
 module.exports = {
@@ -416,4 +647,10 @@ module.exports = {
   createProduct,
   updateProduct,
   orderStatuses: Object.values(OrderStatus),
+  listConversations,
+  getConversationById,
+  takeoverConversation,
+  releaseConversation,
+  replyToConversation,
+  reengageConversation,
 };

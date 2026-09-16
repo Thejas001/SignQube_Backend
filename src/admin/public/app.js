@@ -43,7 +43,15 @@ const state = {
     orders: false,
     overview: false,
     products: false,
+    conversations: false,
+    "test-chat": false,
+    "agent-settings": false,
   },
+  conversations: [],
+  conversationStatusFilter: "ALL",
+  selectedConversationId: null,
+  agentSettings: null,
+  testChatConversationId: localStorage.getItem("signque_test_chat_conversation_id") || null,
   productSearch: "",
   activeProductStep: "basic",
   refreshPromise: null,
@@ -103,6 +111,16 @@ const documentTypesList = document.getElementById("document-types-list");
 const infoItemsList = document.getElementById("info-items-list");
 const addInfoItemButton = document.getElementById("add-info-item-button");
 const productConfigSummary = document.getElementById("product-config-summary");
+const conversationStatusFilter = document.getElementById("conversation-status-filter");
+const conversationSearchInput = document.getElementById("conversation-search");
+const conversationsTableBody = document.getElementById("conversations-table-body");
+const conversationDetailPanel = document.getElementById("conversation-detail-panel");
+const agentSettingsForm = document.getElementById("agent-settings-form");
+const testChatThread = document.getElementById("test-chat-thread");
+const testChatUsageSummary = document.getElementById("test-chat-usage-summary");
+const testChatForm = document.getElementById("test-chat-form");
+const testChatInput = document.getElementById("test-chat-input");
+const testChatResetButton = document.getElementById("test-chat-reset");
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-IN", {
@@ -297,6 +315,9 @@ function setView(viewName) {
     overview: "Insights",
     products: "Products",
     "product-form": "Product Configuration",
+    conversations: "Conversations",
+    "test-chat": "Test Chat",
+    "agent-settings": "Agent Settings",
   };
   const descriptions = {
     orders: "Track incoming orders, filter the queue, and open complete order details without leaving the page.",
@@ -304,6 +325,9 @@ function setView(viewName) {
     overview: "Review sales performance and order distribution with a quick operational summary.",
     products: "Monitor catalog status, pricing, and product readiness for the storefront.",
     "product-form": "Create or update a product in one continuous configuration form.",
+    conversations: "See exactly what the WhatsApp AI agent is saying to customers, and step in when needed.",
+    "test-chat": "Chat with the AI agent yourself to test its replies before customers do.",
+    "agent-settings": "Edit the AI agent's business info, tone, and instructions without a code change.",
   };
 
   views.forEach((view) => {
@@ -1063,6 +1087,404 @@ async function loadProducts() {
   renderProducts();
 }
 
+function formatStatusLabel(status) {
+  return String(status || "")
+    .split("_")
+    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function renderConversationsList() {
+  conversationsTableBody.innerHTML = state.conversations.length
+    ? state.conversations
+        .map(
+          (conversation) => `
+            <tr data-conversation-open="${conversation.id}" class="${conversation.id === state.selectedConversationId ? "selected" : ""} ${conversation.status === "HUMAN_HANDOFF" ? "needs-attention" : ""}">
+              <td>${escapeHtml(conversation.waProfileName || "Unknown")}</td>
+              <td>${escapeHtml(conversation.waPhoneNumber)}</td>
+              <td><span class="status-pill ${conversation.status}">${formatStatusLabel(conversation.status)}</span></td>
+              <td>${conversation.lastInboundAt ? formatDate(conversation.lastInboundAt) : "-"}</td>
+            </tr>
+          `
+        )
+        .join("")
+    : `<tr><td colspan="4" class="muted">No conversations yet.</td></tr>`;
+}
+
+async function loadConversations() {
+  const params = new URLSearchParams({
+    status: conversationStatusFilter.value || "ALL",
+  });
+
+  if (conversationSearchInput.value.trim()) {
+    params.set("search", conversationSearchInput.value.trim());
+  }
+
+  const data = await request(`/api/admin/conversations?${params.toString()}`);
+  state.conversations = data.items;
+  renderConversationsList();
+  renderHandoffBadge(data.summary?.handoffCount || 0);
+}
+
+function renderHandoffBadge(count) {
+  const badge = document.getElementById("conversations-handoff-badge");
+
+  if (!badge) {
+    return;
+  }
+
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.title = `${count} conversation${count === 1 ? "" : "s"} waiting for staff`;
+  badge.classList.toggle("hidden", count === 0);
+}
+
+async function refreshHandoffCount() {
+  try {
+    const data = await request("/api/admin/conversations?status=HUMAN_HANDOFF&limit=1");
+    renderHandoffBadge(data.summary?.handoffCount || 0);
+  } catch (error) {
+    // Background refresh only; the next poll or page load will retry.
+  }
+}
+
+let handoffPollTimer = null;
+
+function startHandoffPolling() {
+  refreshHandoffCount();
+
+  if (!handoffPollTimer) {
+    handoffPollTimer = setInterval(refreshHandoffCount, 30000);
+  }
+}
+
+function formatUsageMeta(message) {
+  if (message.role !== "ASSISTANT" || message.totalTokens == null) {
+    return "";
+  }
+
+  if (message.modelCalls === 0) {
+    return " &middot; instant, no AI call";
+  }
+
+  const parts = [`${message.totalTokens.toLocaleString()} tokens`];
+
+  if (message.modelCalls != null) {
+    parts.push(`${message.modelCalls} ${message.modelCalls === 1 ? "call" : "calls"}`);
+  }
+
+  if (message.durationMs != null) {
+    parts.push(`${(message.durationMs / 1000).toFixed(1)}s`);
+  }
+
+  return ` &middot; ${parts.join(" &middot; ")}`;
+}
+
+function renderMessageBubble(message) {
+  const roleClass = message.role.toLowerCase();
+  const alignment = message.direction === "INBOUND" ? "inbound" : "outbound";
+
+  if (message.role === "TOOL") {
+    return `<div class="message-bubble tool"><strong>${escapeHtml(message.toolName || "tool")}</strong><pre>${escapeHtml(message.content)}</pre></div>`;
+  }
+
+  const photo = message.mediaUrl
+    ? `<a href="${escapeHtml(message.mediaUrl)}" target="_blank" rel="noopener"><img class="message-photo" src="${escapeHtml(message.mediaUrl)}" alt="Customer photo" loading="lazy" /></a>`
+    : "";
+
+  return `
+    <div class="message-bubble ${roleClass} ${alignment}">
+      <div class="message-meta">${message.role === "ADMIN" ? "Staff" : message.role === "ASSISTANT" ? "AI Agent" : "Customer"} &middot; ${formatDate(message.createdAt)}${formatUsageMeta(message)}</div>
+      ${photo}
+      <div class="message-content">${escapeHtml(message.content)}</div>
+    </div>
+  `;
+}
+
+function renderHandoffNotice(conversation) {
+  if (conversation.status !== "HUMAN_HANDOFF") {
+    return "";
+  }
+
+  const since = conversation.handoffAt ? ` &middot; ${formatDate(conversation.handoffAt)}` : "";
+
+  return `
+    <div class="conversation-notice handoff">
+      <div><strong>Waiting for staff</strong>${since}</div>
+      <div>${escapeHtml(conversation.handoffReason || "Taken over by staff")}</div>
+      <div class="muted">The AI agent won't reply until you release this conversation.</div>
+    </div>
+  `;
+}
+
+function renderReplyArea(conversation) {
+  if (conversation.serviceWindowOpen !== false) {
+    return `
+      <form id="conversation-reply-form" class="conversation-reply-form" data-conversation-id="${conversation.id}">
+        <input id="conversation-reply-input" type="text" placeholder="Send a message as staff..." required />
+        <button type="submit" class="primary-button">Send</button>
+      </form>
+    `;
+  }
+
+  const reengageAction = conversation.reengagementTemplateConfigured
+    ? `<button type="button" class="primary-button small-button" data-conversation-reengage="${conversation.id}">Send re-engagement template</button>`
+    : `<div class="muted">Set WHATSAPP_REENGAGEMENT_TEMPLATE on the server to re-open the chat with an approved template.</div>`;
+
+  return `
+    <div class="conversation-notice window-closed">
+      <strong>24-hour window closed</strong>
+      <div class="muted">WhatsApp only delivers free-form messages within 24 hours of the customer's last message. Send the approved template; you can reply normally once they respond.</div>
+      ${reengageAction}
+    </div>
+  `;
+}
+
+function renderConversationDetail(conversation) {
+  const isTakenOver = conversation.status === "HUMAN_HANDOFF";
+
+  conversationDetailPanel.innerHTML = `
+    <div class="conversation-detail-head">
+      <div>
+        <strong>${escapeHtml(conversation.waProfileName || "Unknown customer")}</strong>
+        <div class="muted">${escapeHtml(conversation.waPhoneNumber)}</div>
+      </div>
+      <div class="row-actions">
+        <span class="status-pill ${conversation.status}">${formatStatusLabel(conversation.status)}</span>
+        ${
+          isTakenOver
+            ? `<button type="button" class="ghost-button small-button" data-conversation-release="${conversation.id}">Release to AI</button>`
+            : `<button type="button" class="ghost-button small-button" data-conversation-takeover="${conversation.id}">Take Over</button>`
+        }
+      </div>
+    </div>
+    ${renderHandoffNotice(conversation)}
+    <div class="message-thread">
+      ${conversation.messages.map(renderMessageBubble).join("") || '<div class="muted">No messages yet.</div>'}
+    </div>
+    ${renderReplyArea(conversation)}
+  `;
+
+  conversationDetailPanel.querySelector(".message-thread")?.scrollTo({ top: 999999 });
+}
+
+async function loadConversationDetail(conversationId) {
+  const conversation = await request(`/api/admin/conversations/${conversationId}`);
+  state.selectedConversationId = conversationId;
+  renderConversationsList();
+  renderConversationDetail(conversation);
+}
+
+function renderTestChatUsageSummary(conversation) {
+  const assistantMessages = (conversation?.messages || []).filter(
+    (message) => message.role === "ASSISTANT" && message.totalTokens != null
+  );
+
+  if (assistantMessages.length === 0) {
+    testChatUsageSummary.classList.add("hidden");
+    testChatUsageSummary.textContent = "";
+    return;
+  }
+
+  const totalTokens = assistantMessages.reduce((sum, m) => sum + (m.totalTokens || 0), 0);
+  const totalDurationMs = assistantMessages.reduce((sum, m) => sum + (m.durationMs || 0), 0);
+  const avgDurationS = totalDurationMs / assistantMessages.length / 1000;
+
+  testChatUsageSummary.classList.remove("hidden");
+  testChatUsageSummary.textContent = `Session total: ${totalTokens.toLocaleString()} tokens across ${assistantMessages.length} ${assistantMessages.length === 1 ? "reply" : "replies"} · avg ${avgDurationS.toFixed(1)}s per reply`;
+}
+
+function renderTestChatThread(conversation) {
+  renderTestChatUsageSummary(conversation);
+
+  if (!conversation || !conversation.messages || conversation.messages.length === 0) {
+    testChatThread.innerHTML = '<div class="muted">Send a message below to start testing the agent.</div>';
+    return;
+  }
+
+  const handoffNotice =
+    conversation.status === "HUMAN_HANDOFF"
+      ? `<div class="conversation-notice handoff"><strong>Agent handed off to staff</strong><div>${escapeHtml(conversation.handoffReason || "")}</div><div class="muted">It won't reply in this conversation any more. Click "New Conversation" to keep testing.</div></div>`
+      : "";
+
+  const lastMessage = conversation.messages[conversation.messages.length - 1];
+  const noReplyNotice =
+    conversation.status !== "HUMAN_HANDOFF" && lastMessage?.role === "USER"
+      ? '<div class="muted test-chat-no-reply">No reply sent. The agent stays quiet when a customer only acknowledges ("ok", "thanks") and nothing was asked.</div>'
+      : "";
+
+  testChatThread.innerHTML = conversation.messages.map(renderMessageBubble).join("") + handoffNotice + noReplyNotice;
+  testChatThread.scrollTop = testChatThread.scrollHeight;
+}
+
+function setTestChatConversationId(conversationId) {
+  state.testChatConversationId = conversationId || null;
+  if (conversationId) {
+    localStorage.setItem("signque_test_chat_conversation_id", conversationId);
+  } else {
+    localStorage.removeItem("signque_test_chat_conversation_id");
+  }
+}
+
+async function loadTestChatHistory() {
+  if (!state.testChatConversationId) {
+    renderTestChatThread(null);
+    return;
+  }
+
+  try {
+    const conversation = await request(`/api/admin/conversations/${state.testChatConversationId}`);
+    renderTestChatThread(conversation);
+  } catch (error) {
+    setTestChatConversationId(null);
+    renderTestChatThread(null);
+  }
+}
+
+async function sendTestChatMessage(message) {
+  const conversation = await request("/api/admin/test-chat", {
+    method: "POST",
+    body: JSON.stringify({
+      conversationId: state.testChatConversationId,
+      message,
+    }),
+  });
+  setTestChatConversationId(conversation.id);
+  renderTestChatThread(conversation);
+}
+
+async function loadAgentSettings() {
+  state.agentSettings = await request("/api/admin/agent-settings");
+  renderAgentSettingsForm();
+}
+
+function renderAgentSettingsForm() {
+  const settings = state.agentSettings;
+  if (!settings) {
+    return;
+  }
+
+  document.getElementById("agent-business-name").value = settings.businessName || "";
+  document.getElementById("agent-tone").value = settings.tone || "";
+  document.getElementById("agent-delivery-info").value = settings.deliveryInfo || "";
+  document.getElementById("agent-return-policy").value = settings.returnPolicy || "";
+  document.getElementById("agent-system-prompt-extra").value = settings.systemPromptExtra || "";
+  document.getElementById("agent-welcome-message").value = settings.welcomeMessage || "";
+  renderAgentSettingsTokenHint();
+}
+
+// Mirrors the server: policies over 300 characters are fetched on demand
+// instead of being sent with every call.
+const INLINE_POLICY_CHARS = 300;
+
+function renderAgentSettingsTokenHint() {
+  const hint = document.getElementById("agent-settings-token-hint");
+  if (!hint) {
+    return;
+  }
+
+  const inline = (id) => {
+    const value = document.getElementById(id).value.trim();
+    return value.length > INLINE_POLICY_CHARS ? 30 : value.length;
+  };
+  const chars =
+    document.getElementById("agent-business-name").value.length +
+    document.getElementById("agent-tone").value.length +
+    inline("agent-delivery-info") +
+    inline("agent-return-policy") +
+    document.getElementById("agent-system-prompt-extra").value.trim().length;
+
+  hint.textContent = `These settings add about ${Math.ceil(chars / 4)} tokens to every AI call. Delivery or return text over ${INLINE_POLICY_CHARS} characters is only fetched when a customer asks.`;
+}
+
+agentSettingsForm?.addEventListener("input", renderAgentSettingsTokenHint);
+
+const METRIC_GROUP_LABELS = {
+  answer: "Answered directly",
+  catalog: "Product search / details",
+  save_details: "Saved order details",
+  order: "Placed order",
+  handoff: "Handed to staff",
+  new_order: "Started new order",
+  store_info: "Store policy lookup",
+  fallback: "AI failed (fallback sent)",
+  static: "Instant welcome",
+  unknown: "Other",
+  NONE: "Instant (no AI call)",
+};
+
+function formatMetricGroup(value) {
+  return METRIC_GROUP_LABELS[value] || formatStatusLabel(value);
+}
+
+function formatMetricNumber(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function renderAgentMetrics(metrics) {
+  const panel = document.getElementById("agent-metrics-panel");
+  if (!panel) {
+    return;
+  }
+
+  if (!metrics.replies.count) {
+    panel.innerHTML = '<div class="muted">No AI replies in this period yet.</div>';
+    return;
+  }
+
+  const { replies, modelCalls } = metrics;
+  const breakdown = modelCalls.avgInputBreakdown;
+  const groupRows = (rows, key) =>
+    rows
+      .sort((a, b) => b.replies - a.replies)
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(formatMetricGroup(row[key]))}</td>
+            <td>${formatMetricNumber(row.replies)}</td>
+            <td>${formatMetricNumber(row.tokens.avg)}</td>
+            <td>${formatMetricNumber(row.tokens.p95)}</td>
+            <td>${(row.avgLatencyMs / 1000).toFixed(1)}s</td>
+            <td>${row.avgModelCalls}</td>
+          </tr>`
+      )
+      .join("");
+  const groupTable = (title, rows, key) => `
+    <div class="table-card metrics-table">
+      <table>
+        <thead><tr><th>${title}</th><th>Replies</th><th>Avg tokens</th><th>P95 tokens</th><th>Avg latency</th><th>Calls/reply</th></tr></thead>
+        <tbody>${groupRows(rows, key)}</tbody>
+      </table>
+    </div>`;
+
+  panel.classList.remove("muted");
+  panel.innerHTML = `
+    <div class="metrics-grid">
+      <div class="metric-tile"><span>Replies</span><strong>${formatMetricNumber(replies.count)}</strong><small>${formatMetricNumber(replies.instantReplies)} instant (no AI call)</small></div>
+      <div class="metric-tile"><span>Tokens per reply</span><strong>${formatMetricNumber(replies.totalTokens.avg)}</strong><small>median ${formatMetricNumber(replies.totalTokens.median)} · p95 ${formatMetricNumber(replies.totalTokens.p95)}</small></div>
+      <div class="metric-tile"><span>Latency per reply</span><strong>${(replies.latencyMs.avg / 1000).toFixed(1)}s</strong><small>p95 ${(replies.latencyMs.p95 / 1000).toFixed(1)}s</small></div>
+      <div class="metric-tile"><span>AI calls per reply</span><strong>${replies.avgModelCalls}</strong><small>${replies.avgToolCalls} tool calls per reply</small></div>
+    </div>
+    <div class="muted metrics-note">Average input per AI call (estimated): rules ${formatMetricNumber(breakdown.systemRules)} · customer state ${formatMetricNumber(breakdown.dynamicContext)} · history ${formatMetricNumber(breakdown.history)} · tools ${formatMetricNumber(breakdown.tools)} tokens. Tool use: ${
+      metrics.toolFrequency.map((entry) => `${escapeHtml(entry.tool)} ${entry.count}`).join(", ") || "none"
+    }.</div>
+    ${groupTable("Request type", metrics.byRequestType, "requestType")}
+    ${groupTable("Stage", metrics.byStage, "stage")}
+  `;
+}
+
+async function loadAgentMetrics() {
+  try {
+    renderAgentMetrics(await request("/api/admin/agent-metrics?days=7"));
+  } catch (error) {
+    const panel = document.getElementById("agent-metrics-panel");
+    if (panel) {
+      panel.textContent = `Couldn't load usage: ${error.message}`;
+    }
+  }
+}
+
+document.getElementById("agent-metrics-refresh")?.addEventListener("click", loadAgentMetrics);
+
 async function loadOrderDetail(orderId, options = {}) {
   const order = await request(`/api/admin/orders/${orderId}`);
   renderOrderDetail(order);
@@ -1089,6 +1511,25 @@ async function ensureViewData(viewName) {
   if (viewName === "products" && !state.loadedViews.products) {
     await loadProducts();
     state.loadedViews.products = true;
+  }
+
+  if (viewName === "conversations" && !state.loadedViews.conversations) {
+    await loadConversations();
+    state.loadedViews.conversations = true;
+  }
+
+  if (viewName === "test-chat" && !state.loadedViews["test-chat"]) {
+    await loadTestChatHistory();
+    state.loadedViews["test-chat"] = true;
+  }
+
+  if (viewName === "agent-settings" && !state.loadedViews["agent-settings"]) {
+    await loadAgentSettings();
+    state.loadedViews["agent-settings"] = true;
+  }
+
+  if (viewName === "agent-settings") {
+    loadAgentMetrics();
   }
 }
 
@@ -1138,8 +1579,12 @@ async function bootstrapApp() {
     orders: false,
     overview: false,
     products: false,
+    conversations: false,
+    "test-chat": false,
+    "agent-settings": false,
   };
   await loadAdminProfile();
+  startHandoffPolling();
   const route = getAdminRoute();
   await ensureViewData("orders");
   setView("orders");
@@ -1337,6 +1782,7 @@ document.getElementById("refresh-dashboard").addEventListener("click", async () 
       loadOrders(state.pagination.page),
       state.loadedViews.overview ? loadInsights() : Promise.resolve(),
       state.loadedViews.products ? loadProducts() : Promise.resolve(),
+      state.loadedViews.conversations ? loadConversations() : Promise.resolve(),
     ]);
     showFeedback("Dashboard refreshed.");
   } catch (error) {
@@ -1367,6 +1813,99 @@ orderPaymentFilter.addEventListener("change", () => {
 productSearchInput?.addEventListener("input", () => {
   state.productSearch = productSearchInput.value || "";
   renderProducts();
+});
+
+conversationStatusFilter?.addEventListener("change", async () => {
+  try {
+    await loadConversations();
+  } catch (error) {
+    showFeedback(error.message, true);
+  }
+});
+
+conversationSearchInput?.addEventListener("input", async () => {
+  try {
+    await loadConversations();
+  } catch (error) {
+    showFeedback(error.message, true);
+  }
+});
+
+document.body.addEventListener("submit", async (event) => {
+  const replyForm = event.target.closest("#conversation-reply-form");
+
+  if (!replyForm) {
+    return;
+  }
+
+  event.preventDefault();
+  const input = document.getElementById("conversation-reply-input");
+  const message = input.value.trim();
+
+  if (!message) {
+    return;
+  }
+
+  try {
+    await request(`/api/admin/conversations/${replyForm.dataset.conversationId}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+    input.value = "";
+    await loadConversationDetail(replyForm.dataset.conversationId);
+  } catch (error) {
+    showFeedback(error.message, true);
+  }
+});
+
+testChatForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = testChatInput.value.trim();
+
+  if (!message) {
+    return;
+  }
+
+  testChatInput.value = "";
+  testChatInput.disabled = true;
+
+  try {
+    await sendTestChatMessage(message);
+  } catch (error) {
+    showFeedback(error.message, true);
+  } finally {
+    testChatInput.disabled = false;
+    testChatInput.focus();
+  }
+});
+
+testChatResetButton?.addEventListener("click", () => {
+  setTestChatConversationId(null);
+  renderTestChatThread(null);
+  showFeedback("Started a new test conversation.");
+});
+
+agentSettingsForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  try {
+    state.agentSettings = await request("/api/admin/agent-settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        businessName: document.getElementById("agent-business-name").value.trim(),
+        tone: document.getElementById("agent-tone").value.trim(),
+        deliveryInfo: document.getElementById("agent-delivery-info").value.trim() || null,
+        returnPolicy: document.getElementById("agent-return-policy").value.trim() || null,
+        systemPromptExtra: document.getElementById("agent-system-prompt-extra").value.trim() || null,
+        welcomeMessage: document.getElementById("agent-welcome-message").value.trim() || null,
+      }),
+    });
+    showFeedback("Agent settings saved.");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (error) {
+    showFeedback(error.message, true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 });
 
 prevPageButton.addEventListener("click", async () => {
@@ -1406,8 +1945,46 @@ document.body.addEventListener("click", async (event) => {
   const attributeValueRemoveButton = event.target.closest("[data-attribute-value-remove]");
   const ruleRemoveButton = event.target.closest("[data-rule-remove]");
   const infoRemoveButton = event.target.closest("[data-info-remove]");
+  const conversationOpenRow = event.target.closest("[data-conversation-open]");
+  const conversationTakeoverButton = event.target.closest("[data-conversation-takeover]");
+  const conversationReleaseButton = event.target.closest("[data-conversation-release]");
+  const conversationReengageButton = event.target.closest("[data-conversation-reengage]");
 
   try {
+    if (conversationReengageButton) {
+      const conversationId = conversationReengageButton.dataset.conversationReengage;
+      conversationReengageButton.disabled = true;
+      await request(`/api/admin/conversations/${conversationId}/reengage`, { method: "POST" });
+      showFeedback("Re-engagement template sent. You can reply once the customer responds.");
+      await loadConversationDetail(conversationId);
+      return;
+    }
+
+    if (conversationOpenRow) {
+      await loadConversationDetail(conversationOpenRow.dataset.conversationOpen);
+      return;
+    }
+
+    if (conversationTakeoverButton) {
+      await request(`/api/admin/conversations/${conversationTakeoverButton.dataset.conversationTakeover}/takeover`, {
+        method: "POST",
+      });
+      showFeedback("Conversation taken over. The AI agent will not reply until you release it.");
+      await loadConversations();
+      await loadConversationDetail(conversationTakeoverButton.dataset.conversationTakeover);
+      return;
+    }
+
+    if (conversationReleaseButton) {
+      await request(`/api/admin/conversations/${conversationReleaseButton.dataset.conversationRelease}/release`, {
+        method: "POST",
+      });
+      showFeedback("Conversation released back to the AI agent. It will answer any unanswered customer message.");
+      await loadConversations();
+      await loadConversationDetail(conversationReleaseButton.dataset.conversationRelease);
+      return;
+    }
+
     if (orderButton) {
       await loadOrderDetail(orderButton.dataset.orderOpen);
       clearFeedback();

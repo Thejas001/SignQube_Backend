@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SIGNQUE Admin</title>
-    <link rel="stylesheet" href="/admin/styles.css?v=20260728b" />
+    <link rel="stylesheet" href="/admin/styles.css?v=20260917a" />
   </head>
   <body>
     <div id="auth-screen" class="auth-screen">
@@ -53,6 +53,19 @@
           <button class="nav-link" data-view-target="product-form">
             <span class="nav-icon">+</span>
             <span class="sidebar-expand-only">Product Setup</span>
+          </button>
+          <button class="nav-link" data-view-target="conversations">
+            <span class="nav-icon">W</span>
+            <span class="sidebar-expand-only">Conversations</span>
+            <span id="conversations-handoff-badge" class="nav-badge hidden"></span>
+          </button>
+          <button class="nav-link" data-view-target="test-chat">
+            <span class="nav-icon">T</span>
+            <span class="sidebar-expand-only">Test Chat</span>
+          </button>
+          <button class="nav-link" data-view-target="agent-settings">
+            <span class="nav-icon">A</span>
+            <span class="sidebar-expand-only">Agent Settings</span>
           </button>
         </nav>
 
@@ -409,9 +422,127 @@
             </form>
           </div>
         </section>
+
+        <section class="view" data-view="conversations">
+          <div class="orders-page">
+            <div class="toolbar order-toolbar">
+              <div class="toolbar-row">
+                <select id="conversation-status-filter">
+                  <option value="ALL">All Status</option>
+                  <option value="DISCOVERY">Discovery</option>
+                  <option value="PRODUCT_RECOMMENDATION">Product Recommendation</option>
+                  <option value="PRODUCT_SELECTED">Product Selected</option>
+                  <option value="CUSTOMIZATION">Customization</option>
+                  <option value="PHOTO_REQUIRED">Photo Required</option>
+                  <option value="ADDRESS_REQUIRED">Address Required</option>
+                  <option value="ORDER_READY">Order Ready</option>
+                  <option value="PAYMENT_PENDING">Payment Pending</option>
+                  <option value="PAID">Paid</option>
+                  <option value="COMPLETED">Completed</option>
+                  <option value="HUMAN_HANDOFF">Human Handoff</option>
+                </select>
+              </div>
+              <input id="conversation-search" type="search" placeholder="Search phone or name" />
+            </div>
+            <div class="conversations-layout">
+              <div class="table-card conversation-list-card">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Customer</th>
+                      <th>Phone</th>
+                      <th>Status</th>
+                      <th>Last Activity</th>
+                    </tr>
+                  </thead>
+                  <tbody id="conversations-table-body"></tbody>
+                </table>
+              </div>
+              <div id="conversation-detail-panel" class="conversation-detail-panel">
+                <div class="muted">Select a conversation to view the thread.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view="test-chat">
+          <div class="orders-page">
+            <div class="panel test-chat-panel">
+              <div class="panel-head stacked">
+                <div>
+                  <h3>Test the AI Agent</h3>
+                  <span>Chat as a customer to try the agent's replies, quoting, and ordering flow &mdash; no WhatsApp needed.</span>
+                </div>
+                <button id="test-chat-reset" type="button" class="ghost-button">New Conversation</button>
+              </div>
+              <div id="test-chat-usage-summary" class="test-chat-usage-summary hidden"></div>
+              <div id="test-chat-thread" class="message-thread test-chat-thread">
+                <div class="muted">Send a message below to start testing the agent.</div>
+              </div>
+              <form id="test-chat-form" class="conversation-reply-form">
+                <input id="test-chat-input" type="text" placeholder="Type a message as a customer..." required />
+                <button type="submit" class="primary-button">Send</button>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view="agent-settings">
+          <div class="orders-page">
+            <div class="panel form-panel">
+              <div class="panel-head stacked">
+                <div>
+                  <h3>AI Agent Settings</h3>
+                  <span>Control what the WhatsApp sales agent says, without touching code.</span>
+                </div>
+              </div>
+              <form id="agent-settings-form" class="form-layout single-column compact-gap">
+                <label>
+                  <span>Business name</span>
+                  <input id="agent-business-name" name="businessName" required />
+                </label>
+                <label>
+                  <span>Tone</span>
+                  <input id="agent-tone" name="tone" required />
+                </label>
+                <label>
+                  <span>Delivery info</span>
+                  <textarea id="agent-delivery-info" rows="3" placeholder="e.g. Delivery within 5-7 business days across India."></textarea>
+                </label>
+                <label>
+                  <span>Return policy</span>
+                  <textarea id="agent-return-policy" rows="3" placeholder="e.g. 7-day replacement for damaged items."></textarea>
+                </label>
+                <label>
+                  <span>Extra instructions</span>
+                  <textarea id="agent-system-prompt-extra" rows="4" placeholder="Any additional rules the agent should follow."></textarea>
+                </label>
+                <label>
+                  <span>Welcome message</span>
+                  <textarea id="agent-welcome-message" rows="2" placeholder="Leave empty to let the AI write the greeting."></textarea>
+                  <small class="muted">Sent instantly, with no AI call, when a new customer's first message is just a greeting ("hi", "hello"). {businessName} is replaced with your business name.</small>
+                </label>
+                <div id="agent-settings-token-hint" class="muted"></div>
+                <div class="form-actions top-gap">
+                  <button type="submit" class="primary-button">Save Settings</button>
+                </div>
+              </form>
+            </div>
+            <div class="panel form-panel">
+              <div class="panel-head stacked">
+                <div>
+                  <h3>AI Usage</h3>
+                  <span>Tokens, latency and calls per AI reply over the last 7 days, including Test Chat.</span>
+                </div>
+                <button id="agent-metrics-refresh" type="button" class="ghost-button small-button">Refresh</button>
+              </div>
+              <div id="agent-metrics-panel" class="agent-metrics-panel muted">Loading...</div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
 
-    <script src="/admin/app.js?v=20260728b"></script>
+    <script src="/admin/app.js?v=20260917a"></script>
   </body>
 </html>

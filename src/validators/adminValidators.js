@@ -1,5 +1,5 @@
 const { z } = require("zod");
-const { OrderStatus } = require("@prisma/client");
+const { OrderStatus, ConversationStatus } = require("@prisma/client");
 const { uuidSchema } = require("./commonValidators");
 
 const emptyBody = z.object({}).optional().default({});
@@ -126,7 +126,77 @@ const adminProductUpdateSchema = z.object({
   query: emptyQuery,
 });
 
+const adminConversationQuerySchema = z.object({
+  body: emptyBody,
+  params: z.object({}).optional().default({}),
+  query: z.object({
+    status: z.enum(["ALL", ...Object.values(ConversationStatus)]).optional().default("ALL"),
+    search: z.string().trim().max(100).optional(),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    limit: z.coerce.number().int().min(1).max(50).optional().default(20),
+  }),
+});
+
+const adminConversationIdParamSchema = z.object({
+  body: emptyBody,
+  params: z.object({
+    id: uuidSchema,
+  }),
+  query: emptyQuery,
+});
+
+const adminConversationReplySchema = z.object({
+  body: z.object({
+    message: z.string().trim().min(1).max(4000),
+  }),
+  params: z.object({
+    id: uuidSchema,
+  }),
+  query: emptyQuery,
+});
+
+const adminTestChatSchema = z.object({
+  body: z.object({
+    conversationId: uuidSchema.optional().nullable(),
+    message: z.string().trim().min(1).max(2000),
+  }),
+  params: z.object({}).optional().default({}),
+  query: emptyQuery,
+});
+
+const adminAgentSettingsUpdateSchema = z.object({
+  body: z
+    .object({
+      businessName: z.string().trim().min(1).max(255),
+      tone: z.string().trim().min(1).max(255),
+      systemPromptExtra: z.string().trim().max(4000).optional().nullable(),
+      deliveryInfo: z.string().trim().max(2000).optional().nullable(),
+      returnPolicy: z.string().trim().max(2000).optional().nullable(),
+      welcomeMessage: z.string().trim().max(500).optional().nullable(),
+    })
+    .partial()
+    .refine((value) => Object.keys(value).length > 0, {
+      message: "At least one field is required",
+    }),
+  params: z.object({}).optional().default({}),
+  query: emptyQuery,
+});
+
+const adminAgentMetricsQuerySchema = z.object({
+  body: emptyBody,
+  params: z.object({}).optional().default({}),
+  query: z.object({
+    days: z.coerce.number().int().min(1).max(90).optional().default(7),
+    includeTest: z
+      .enum(["true", "false"])
+      .optional()
+      .default("true")
+      .transform((value) => value === "true"),
+  }),
+});
+
 module.exports = {
+  adminAgentMetricsQuerySchema,
   adminLoginSchema,
   adminOrderIdParamSchema,
   adminOrderQuerySchema,
@@ -134,4 +204,9 @@ module.exports = {
   adminProductCreateSchema,
   adminProductIdParamSchema,
   adminProductUpdateSchema,
+  adminConversationQuerySchema,
+  adminConversationIdParamSchema,
+  adminConversationReplySchema,
+  adminTestChatSchema,
+  adminAgentSettingsUpdateSchema,
 };

@@ -1342,3 +1342,249 @@ tbody tr:last-child td {
     font-size: 2rem;
   }
 }
+
+/* Conversations */
+
+.status-pill.DISCOVERY,
+.status-pill.PRODUCT_RECOMMENDATION,
+.status-pill.PRODUCT_SELECTED,
+.status-pill.CUSTOMIZATION {
+  background: var(--pending-bg);
+  color: var(--pending-text);
+}
+
+.status-pill.PHOTO_REQUIRED,
+.status-pill.ADDRESS_REQUIRED,
+.status-pill.ORDER_READY {
+  background: #dfeaff;
+  color: #1f4fa3;
+}
+
+.status-pill.PAYMENT_PENDING {
+  background: #fde8cc;
+  color: #a15c07;
+}
+
+.status-pill.PAID,
+.status-pill.COMPLETED {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.status-pill.HUMAN_HANDOFF {
+  background: var(--cancel-bg);
+  color: var(--cancel-text);
+}
+
+.conversations-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.conversation-list-card tbody tr.selected {
+  background: var(--panel-soft);
+}
+
+.conversation-list-card tbody tr.needs-attention td:first-child {
+  box-shadow: inset 3px 0 0 var(--cancel-text);
+}
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: var(--cancel-text);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.conversation-notice {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+}
+
+.conversation-notice.handoff {
+  background: var(--cancel-bg);
+  color: var(--cancel-text);
+}
+
+.conversation-notice.window-closed {
+  background: #fde8cc;
+  color: #a15c07;
+  justify-items: start;
+}
+
+.message-photo {
+  display: block;
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+  object-fit: cover;
+}
+
+.conversation-detail-panel {
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: 24px;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.conversation-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.message-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.message-bubble {
+  max-width: 88%;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.message-bubble.inbound {
+  align-self: flex-start;
+  background: var(--panel-soft);
+}
+
+.message-bubble.outbound {
+  align-self: flex-end;
+  background: var(--pending-bg);
+}
+
+.message-bubble.admin.outbound {
+  background: #dfeaff;
+}
+
+.message-bubble.tool {
+  align-self: center;
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  max-width: 100%;
+  font-size: 0.82rem;
+}
+
+.message-bubble.tool pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+}
+
+.message-meta {
+  font-size: 0.74rem;
+  color: var(--text-soft);
+  margin-bottom: 4px;
+}
+
+.message-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.conversation-reply-form {
+  display: flex;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.conversation-reply-form input {
+  flex: 1;
+}
+
+@media (max-width: 900px) {
+  .conversations-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.test-chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.test-chat-thread {
+  min-height: 320px;
+  max-height: 60vh;
+}
+
+.test-chat-usage-summary {
+  font-size: 0.82rem;
+  color: var(--text-soft);
+  background: var(--panel-soft);
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+}
+
+/* AI usage panel */
+
+.agent-metrics-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.metric-tile {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.metric-tile span,
+.metric-tile small {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
+.metric-tile strong {
+  font-size: 1.4rem;
+}
+
+.metrics-note {
+  font-size: 0.85rem;
+}
+
+.metrics-table {
+  overflow-x: auto;
+}
+
+.test-chat-no-reply {
+  align-self: center;
+  font-size: 0.82rem;
+  text-align: center;
+}

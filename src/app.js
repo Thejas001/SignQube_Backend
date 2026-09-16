@@ -9,6 +9,7 @@ const routes = require("./routes");
 const docsRoutes = require("./routes/docsRoutes");
 const adminPageRoutes = require("./routes/adminPageRoutes");
 const paymentController = require("./controllers/paymentController");
+const whatsappController = require("./controllers/whatsappController");
 const notFound = require("./middlewares/notFound");
 const errorHandler = require("./middlewares/errorHandler");
 
@@ -46,6 +47,12 @@ app.post(
   "/api/payments/razorpay/webhook",
   express.raw({ type: "application/json" }),
   paymentController.handleRazorpayWebhook
+);
+app.get("/api/whatsapp/webhook", whatsappController.verifyWebhook);
+app.post(
+  "/api/whatsapp/webhook",
+  express.raw({ type: "application/json" }),
+  whatsappController.handleIncomingMessage
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

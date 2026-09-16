@@ -8,6 +8,7 @@
     "dev": "nodemon src/server.js",
     "build": "node -e \"console.log('No build step required for this project')\"",
     "start": "node src/server.js",
+    "test": "node --test \"tests/**/*.test.js\"",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:db:seed": "prisma db seed"
@@ -36,6 +37,7 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
+    "openai": "^4.104.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

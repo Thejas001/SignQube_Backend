@@ -5,10 +5,14 @@ const { calculateCartTotals, calculateLineTotal, toMoney } = require("../utils/p
 const { generateOrderNumber } = require("../utils/order");
 const {
   createRazorpayOrder,
+  createPaymentLink,
   getRazorpayConfig,
   verifyRazorpayPaymentSignature,
   verifyRazorpayWebhookSignature,
 } = require("../utils/razorpay");
+const env = require("../config/env");
+const { notifyCustomer } = require("./customerMessagingService");
+const { computeStage, ORDER_DRAFT_KEYS } = require("./conversationStageService");
 
 function normalizeOrder(order) {
   return {
@@ -84,7 +88,11 @@ async function findOrderWithPayment(where) {
   return order;
 }
 
-async function createOrder(userId, payload) {
+async function createOrder(userId, payload, options = {}) {
+  const paymentMode = options.paymentMode === "payment_link" ? "payment_link" : "checkout";
+  const source = options.source === "WHATSAPP" ? "WHATSAPP" : "WEB";
+  const conversationId = options.conversationId || null;
+
   const address = await prisma.address.findFirst({
     where: {
       id: payload.addressId,
@@ -125,8 +133,21 @@ async function createOrder(userId, payload) {
   const needsOnlinePayment = payload.paymentMethod !== "COD";
 
   let razorpayOrder = null;
+  let paymentLink = null;
 
-  if (needsOnlinePayment) {
+  if (needsOnlinePayment && paymentMode === "payment_link") {
+    paymentLink = await createPaymentLink({
+      amountInPaise: Math.round(totals.totalAmount * 100),
+      description: `Payment for SIGNQUE order ${orderNumber}`,
+      customerName: address.fullName,
+      customerContact: address.phone,
+      referenceId: orderNumber,
+      notes: {
+        userId,
+        addressId: payload.addressId,
+      },
+    });
+  } else if (needsOnlinePayment) {
     razorpayOrder = await createRazorpayOrder({
       amountInPaise: Math.round(totals.totalAmount * 100),
       receipt: orderNumber,
@@ -142,9 +163,11 @@ async function createOrder(userId, payload) {
       data: {
         userId,
         addressId: payload.addressId,
+        conversationId,
         orderNumber,
         status: "PENDING",
         paymentMethod: payload.paymentMethod,
+        source,
         subtotal: toMoney(totals.subtotal),
         shippingFee: toMoney(totals.shippingFee),
         totalAmount: toMoney(totals.totalAmount),
@@ -163,8 +186,10 @@ async function createOrder(userId, payload) {
             {
               method: payload.paymentMethod,
               status: PaymentStatus.PENDING,
-              transactionRef: razorpayOrder?.id || null,
+              transactionRef: razorpayOrder?.id || paymentLink?.id || null,
               gatewayOrderId: razorpayOrder?.id || null,
+              paymentLinkId: paymentLink?.id || null,
+              paymentLinkUrl: paymentLink?.short_url || null,
               amount: toMoney(totals.totalAmount),
               paidAt: null,
             },
@@ -304,10 +329,12 @@ async function handleRazorpayWebhook(rawBodyBuffer, signature) {
   const paymentEntity = event.payload?.payment?.entity || null;
   const orderEntity = event.payload?.order?.entity || null;
   const refundEntity = event.payload?.refund?.entity || null;
+  const paymentLinkEntity = event.payload?.payment_link?.entity || null;
   const gatewayOrderId = paymentEntity?.order_id || orderEntity?.id || refundEntity?.notes?.razorpay_order_id;
   const gatewayPaymentId = paymentEntity?.id || refundEntity?.payment_id || null;
+  const paymentLinkId = paymentLinkEntity?.id || null;
 
-  if (!gatewayOrderId && !gatewayPaymentId) {
+  if (!gatewayOrderId && !gatewayPaymentId && !paymentLinkId) {
     return { processed: false, reason: "No Razorpay identifiers in webhook payload" };
   }
 
@@ -316,10 +343,15 @@ async function handleRazorpayWebhook(rawBodyBuffer, signature) {
       OR: [
         gatewayOrderId ? { gatewayOrderId } : undefined,
         gatewayPaymentId ? { gatewayPaymentId } : undefined,
+        paymentLinkId ? { paymentLinkId } : undefined,
       ].filter(Boolean),
     },
     include: {
-      order: true,
+      order: {
+        include: {
+          conversation: true,
+        },
+      },
     },
   });
 
@@ -332,6 +364,7 @@ async function handleRazorpayWebhook(rawBodyBuffer, signature) {
     gatewayPaymentId: gatewayPaymentId || payment.gatewayPaymentId,
   };
   let orderStatus = payment.order.status;
+  const previousOrderStatus = payment.order.status;
 
   if (event.event === "payment.failed") {
     updateData.status = PaymentStatus.FAILED;
@@ -341,11 +374,30 @@ async function handleRazorpayWebhook(rawBodyBuffer, signature) {
     updateData.status = PaymentStatus.REFUNDED;
   }
 
-  if (event.event === "payment.captured" || event.event === "order.paid") {
+  if (
+    event.event === "payment.captured" ||
+    event.event === "order.paid" ||
+    event.event === "payment_link.paid"
+  ) {
     updateData.status = PaymentStatus.SUCCESS;
     updateData.transactionRef = gatewayPaymentId || payment.transactionRef;
     updateData.paidAt = payment.paidAt || new Date();
     orderStatus = "PROCESSING";
+  }
+
+  const isPaymentLinkClosed =
+    event.event === "payment_link.expired" || event.event === "payment_link.cancelled";
+
+  if (
+    isPaymentLinkClosed &&
+    payment.status !== PaymentStatus.SUCCESS &&
+    payment.status !== PaymentStatus.REFUNDED
+  ) {
+    updateData.status = PaymentStatus.FAILED;
+
+    if (payment.order.status === "PENDING") {
+      orderStatus = "CANCELLED";
+    }
   }
 
   await prisma.$transaction(async (tx) => {
@@ -362,12 +414,86 @@ async function handleRazorpayWebhook(rawBodyBuffer, signature) {
     }
   });
 
+  if (payment.order.source === "WHATSAPP" && payment.order.conversation) {
+    try {
+      if (orderStatus === "PROCESSING" && previousOrderStatus !== "PROCESSING") {
+        await handleWhatsappOrderPaid(payment.order);
+      } else if (orderStatus === "CANCELLED" && previousOrderStatus !== "CANCELLED") {
+        await handleWhatsappPaymentLinkClosed(payment.order, event.event);
+      }
+    } catch (error) {
+      // The payment/order update above is already committed; a messaging
+      // failure must not make Razorpay retry the webhook.
+      console.error("Failed to update WhatsApp conversation after payment event:", error.message);
+    }
+  }
+
   return {
     processed: true,
     event: event.event,
     paymentId: payment.id,
     orderId: payment.orderId,
   };
+}
+
+function readDraft(conversation) {
+  return conversation.draftOrder && typeof conversation.draftOrder === "object" ? conversation.draftOrder : {};
+}
+
+async function handleWhatsappOrderPaid(order) {
+  const conversation = order.conversation;
+  const draft = readDraft(conversation);
+
+  // Only move the conversation along if this order is the one in progress and
+  // staff haven't taken over; releasing a handoff re-derives PAID from the order.
+  if (draft.orderId === order.id && conversation.status !== "HUMAN_HANDOFF") {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { status: "PAID" },
+    });
+  }
+
+  await notifyCustomer(
+    conversation,
+    `Payment received! Your order ${order.orderNumber} is confirmed and will be processed shortly. Thank you for shopping with SIGNQUE.`,
+    {
+      template: env.whatsapp.paymentConfirmedTemplate
+        ? {
+            name: env.whatsapp.paymentConfirmedTemplate,
+            components: [{ type: "body", parameters: [{ type: "text", text: order.orderNumber }] }],
+          }
+        : null,
+    }
+  );
+}
+
+async function handleWhatsappPaymentLinkClosed(order, eventName) {
+  const conversation = order.conversation;
+  const draft = readDraft(conversation);
+
+  // A link we cancelled ourselves (start_new_order) was already detached from
+  // the draft, so this only acts on the order the customer is still waiting on.
+  if (draft.orderId !== order.id || conversation.status !== "PAYMENT_PENDING") {
+    return;
+  }
+
+  const nextDraft = { ...draft, expiredOrderNumber: order.orderNumber };
+  ORDER_DRAFT_KEYS.forEach((key) => delete nextDraft[key]);
+
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      draftOrder: nextDraft,
+      status: await computeStage(nextDraft),
+    },
+  });
+
+  const reason = eventName === "payment_link.expired" ? "has expired" : "was cancelled";
+
+  await notifyCustomer(
+    conversation,
+    `The payment link for your order ${order.orderNumber} ${reason}. Just reply here if you'd still like it and I'll send you a fresh link.`
+  );
 }
 
 module.exports = {

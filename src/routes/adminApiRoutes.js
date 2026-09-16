@@ -11,6 +11,12 @@ const {
   adminProductCreateSchema,
   adminProductIdParamSchema,
   adminProductUpdateSchema,
+  adminConversationQuerySchema,
+  adminConversationIdParamSchema,
+  adminConversationReplySchema,
+  adminTestChatSchema,
+  adminAgentSettingsUpdateSchema,
+  adminAgentMetricsQuerySchema,
 } = require("../validators/adminValidators");
 
 const router = express.Router();
@@ -34,6 +40,47 @@ router.patch(
   "/products/:id",
   validate(adminProductUpdateSchema),
   adminController.updateProduct
+);
+
+router.get(
+  "/conversations",
+  validate(adminConversationQuerySchema),
+  adminController.getConversations
+);
+router.get(
+  "/conversations/:id",
+  validate(adminConversationIdParamSchema),
+  adminController.getConversationById
+);
+router.post(
+  "/conversations/:id/takeover",
+  validate(adminConversationIdParamSchema),
+  adminController.takeoverConversation
+);
+router.post(
+  "/conversations/:id/release",
+  validate(adminConversationIdParamSchema),
+  adminController.releaseConversation
+);
+router.post(
+  "/conversations/:id/reply",
+  validate(adminConversationReplySchema),
+  adminController.replyToConversation
+);
+router.post(
+  "/conversations/:id/reengage",
+  validate(adminConversationIdParamSchema),
+  adminController.reengageConversation
+);
+
+router.post("/test-chat", validate(adminTestChatSchema), adminController.sendTestChatMessage);
+
+router.get("/agent-settings", adminController.getAgentSettings);
+router.get("/agent-metrics", validate(adminAgentMetricsQuerySchema), adminController.getAgentMetrics);
+router.put(
+  "/agent-settings",
+  validate(adminAgentSettingsUpdateSchema),
+  adminController.updateAgentSettings
 );
 
 module.exports = router;

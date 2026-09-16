@@ -19,6 +19,39 @@ enum PaymentMethod {
   UPI
   CARD
   COD
+  PAYMENT_LINK
+}
+
+enum ConversationStatus {
+  DISCOVERY
+  PRODUCT_RECOMMENDATION
+  PRODUCT_SELECTED
+  CUSTOMIZATION
+  PHOTO_REQUIRED
+  ADDRESS_REQUIRED
+  ORDER_READY
+  PAYMENT_PENDING
+  PAID
+  COMPLETED
+  HUMAN_HANDOFF
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+  ADMIN
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum OrderSource {
+  WEB
+  WHATSAPP
 }
 
 enum PaymentStatus {
@@ -47,6 +80,7 @@ model User {
   customizations Customization[]
   orders        Order[]
   refreshTokens RefreshToken[]
+  conversations Conversation[]
 
   @@index([email])
   @@map("users")
@@ -66,6 +100,9 @@ model Product {
   addons         Json?
   uploadConfig   Json?           @map("upload_config")
   isActive       Boolean         @default(true) @map("is_active")
+  embedding      Json?
+  embeddingModel String?         @map("embedding_model") @db.VarChar(100)
+  embeddingUpdatedAt DateTime?   @map("embedding_updated_at")
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @updatedAt @map("updated_at")
   cartItems      CartItem[]
@@ -136,26 +173,30 @@ model Address {
 }
 
 model Order {
-  id            String        @id @default(uuid()) @db.Uuid
-  userId        String        @map("user_id") @db.Uuid
-  addressId     String        @map("address_id") @db.Uuid
-  orderNumber   String        @unique @map("order_number") @db.VarChar(50)
-  status        OrderStatus   @default(PENDING)
-  paymentMethod PaymentMethod @map("payment_method")
-  subtotal      Decimal       @db.Decimal(10, 2)
-  shippingFee   Decimal       @map("shipping_fee") @db.Decimal(10, 2)
-  totalAmount   Decimal       @map("total_amount") @db.Decimal(10, 2)
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
-  address       Address       @relation(fields: [addressId], references: [id], onDelete: Restrict)
-  items         OrderItem[]
-  payments      Payment[]
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String        @map("user_id") @db.Uuid
+  addressId      String        @map("address_id") @db.Uuid
+  conversationId String?       @map("conversation_id") @db.Uuid
+  orderNumber    String        @unique @map("order_number") @db.VarChar(50)
+  status         OrderStatus   @default(PENDING)
+  paymentMethod  PaymentMethod @map("payment_method")
+  source         OrderSource   @default(WEB)
+  subtotal       Decimal       @db.Decimal(10, 2)
+  shippingFee    Decimal       @map("shipping_fee") @db.Decimal(10, 2)
+  totalAmount    Decimal       @map("total_amount") @db.Decimal(10, 2)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+  address        Address       @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  items          OrderItem[]
+  payments       Payment[]
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([addressId])
   @@index([status])
   @@index([orderNumber])
+  @@index([conversationId])
   @@map("orders")
 }
 
@@ -180,24 +221,27 @@ model OrderItem {
 }
 
 model Payment {
-  id             String        @id @default(uuid()) @db.Uuid
-  orderId        String        @map("order_id") @db.Uuid
-  method         PaymentMethod
-  status         PaymentStatus @default(PENDING)
-  transactionRef String?       @map("transaction_ref") @db.VarChar(255)
-  gatewayOrderId String?       @map("gateway_order_id") @db.VarChar(255)
-  gatewayPaymentId String?     @map("gateway_payment_id") @db.VarChar(255)
-  gatewaySignature String?     @map("gateway_signature") @db.VarChar(255)
-  amount         Decimal       @db.Decimal(10, 2)
-  paidAt         DateTime?     @map("paid_at")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
-  order          Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  id               String        @id @default(uuid()) @db.Uuid
+  orderId          String        @map("order_id") @db.Uuid
+  method           PaymentMethod
+  status           PaymentStatus @default(PENDING)
+  transactionRef   String?       @map("transaction_ref") @db.VarChar(255)
+  gatewayOrderId   String?       @map("gateway_order_id") @db.VarChar(255)
+  gatewayPaymentId String?       @map("gateway_payment_id") @db.VarChar(255)
+  gatewaySignature String?       @map("gateway_signature") @db.VarChar(255)
+  paymentLinkId    String?       @unique @map("payment_link_id") @db.VarChar(255)
+  paymentLinkUrl   String?       @map("payment_link_url")
+  amount           Decimal       @db.Decimal(10, 2)
+  paidAt           DateTime?     @map("paid_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+  order            Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
   @@index([status])
   @@index([gatewayOrderId])
   @@index([gatewayPaymentId])
+  @@index([paymentLinkId])
   @@map("payments")
 }
 
@@ -211,4 +255,99 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+model Conversation {
+  id             String             @id @default(uuid()) @db.Uuid
+  waPhoneNumber  String             @unique @map("wa_phone_number") @db.VarChar(20)
+  waProfileName  String?            @map("wa_profile_name") @db.VarChar(255)
+  userId         String?            @map("user_id") @db.Uuid
+  status         ConversationStatus @default(DISCOVERY)
+  draftOrder     Json?              @map("draft_order")
+  agentContext   Json?              @map("agent_context")
+  handoffReason  String?            @map("handoff_reason")
+  handoffAt      DateTime?          @map("handoff_at")
+  lastInboundAt  DateTime?          @map("last_inbound_at")
+  lastOutboundAt DateTime?          @map("last_outbound_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  user           User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages       Message[]
+  orders         Order[]
+  modelCallLogs  AgentModelCall[]
+
+  @@index([waPhoneNumber])
+  @@index([userId])
+  @@index([status])
+  @@map("conversations")
+}
+
+model Message {
+  id             String           @id @default(uuid()) @db.Uuid
+  conversationId String           @map("conversation_id") @db.Uuid
+  role           MessageRole
+  direction      MessageDirection
+  content        String
+  waMessageId    String?          @unique @map("wa_message_id") @db.VarChar(255)
+  mediaId        String?          @map("media_id") @db.VarChar(255)
+  mediaUrl       String?          @map("media_url")
+  toolName      String?          @map("tool_name") @db.VarChar(100)
+  toolPayload    Json?            @map("tool_payload")
+  promptTokens   Int?             @map("prompt_tokens")
+  completionTokens Int?           @map("completion_tokens")
+  totalTokens    Int?             @map("total_tokens")
+  durationMs     Int?             @map("duration_ms")
+  modelCalls     Int?             @map("model_calls")
+  toolCalls      Int?             @map("tool_calls")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([waMessageId])
+  @@map("messages")
+}
+
+model AgentSettings {
+  id                String   @id @default("default")
+  businessName      String   @default("SIGNQUE") @map("business_name") @db.VarChar(255)
+  tone              String   @default("Friendly and helpful") @db.VarChar(255)
+  systemPromptExtra String?  @map("system_prompt_extra")
+  deliveryInfo      String?  @map("delivery_info")
+  returnPolicy      String?  @map("return_policy")
+  welcomeMessage    String?  @default("Hi, how can I help you?") @map("welcome_message")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("agent_settings")
+}
+
+// One row per model API call, for token/latency observability. Holds counts
+// only, never message content.
+model AgentModelCall {
+  id               String             @id @default(uuid()) @db.Uuid
+  conversationId   String             @map("conversation_id") @db.Uuid
+  messageId        String?            @map("message_id") @db.Uuid
+  round            Int
+  stage            ConversationStatus
+  requestType      String             @map("request_type") @db.VarChar(40)
+  model            String             @db.VarChar(100)
+  inputTokens      Int                @map("input_tokens")
+  outputTokens     Int                @map("output_tokens")
+  totalTokens      Int                @map("total_tokens")
+  cachedTokens     Int?               @map("cached_tokens")
+  latencyMs        Int                @map("latency_ms")
+  messageCount     Int                @map("message_count")
+  estSystemTokens  Int                @map("est_system_tokens")
+  estContextTokens Int                @map("est_context_tokens")
+  estHistoryTokens Int                @map("est_history_tokens")
+  estToolTokens    Int                @map("est_tool_tokens")
+  toolCalls        Int                @map("tool_calls")
+  toolNames        String[]           @map("tool_names")
+  finishReason     String?            @map("finish_reason") @db.VarChar(40)
+  createdAt        DateTime           @default(now()) @map("created_at")
+  conversation     Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([conversationId])
+  @@index([messageId])
+  @@map("agent_model_calls")
 }
