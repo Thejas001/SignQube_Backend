@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: signque-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: signque
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: signque
+    ports:
+      - "5432:5432"
+    volumes:
+      - signque_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signque -d signque"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: signque-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgresql://signque:password@db:5432/signque?schema=public"
+      PORT: "4000"
+    ports:
+      - "4000:4000"
+    command: sh -c "npx prisma migrate deploy && node src/server.js"
+
+volumes:
+  signque_pgdata:

@@ -1,0 +1,366 @@
+// SIGNQUE — order-to-print production system
+// PostgreSQL via Prisma. Int autoincrement PKs, snake_case tables/columns.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  DESIGNER
+  PRINTER
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAYMENT_FAILED
+  PLACED
+  DESIGN_ASSIGNED
+  DESIGN_IN_PROGRESS
+  DESIGN_SUBMITTED
+  AWAITING_CUSTOMER_APPROVAL
+  CUSTOMER_APPROVED
+  PRINT_ASSIGNED
+  PRINTING
+  PRINT_COMPLETED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum DesignVersionStatus {
+  SUBMITTED
+  ADMIN_REJECTED
+  SENT_TO_CUSTOMER
+  CUSTOMER_APPROVED
+  CHANGES_REQUESTED
+}
+
+enum ReviewerRole {
+  ADMIN
+  CUSTOMER
+}
+
+enum ReviewDecision {
+  APPROVED
+  CHANGES_REQUESTED
+}
+
+enum MaterialColor {
+  WHITE
+  BLACK
+}
+
+enum SheetSize {
+  A1
+  A2
+  A3
+  A4
+}
+
+enum PrintStage {
+  ASSIGNED
+  CUTTING
+  PRINTING
+  QUALITY_CHECK
+  DONE
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ---------------------------------------------------------------- models
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  phone        String?
+  passwordHash String   @map("password_hash")
+  role         Role     @default(CUSTOMER)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  refreshTokens     RefreshToken[]
+  addresses         Address[]
+  customizations    Customization[]
+  orders            Order[]              @relation("OrderCustomer")
+  designerOrders    Order[]              @relation("OrderDesigner")
+  printerOrders     Order[]              @relation("OrderPrinter")
+  designVersions    DesignVersion[]
+  designReviews     DesignReview[]
+  printJobs         PrintJob[]           @relation("PrintJobPrinter")
+  assignedPrintJobs PrintJob[]           @relation("PrintJobAssignedBy")
+  statusChanges     OrderStatusHistory[]
+  notifications     Notification[]
+
+  @@index([role, isActive])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  title       String
+  description String?
+  basePrice   Decimal  @map("base_price") @db.Decimal(10, 2)
+  imageUrl    String?  @map("image_url")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customizations Customization[]
+  orderItems     OrderItem[]
+
+  @@index([isActive])
+  @@map("products")
+}
+
+model Address {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  fullName  String   @map("full_name")
+  phone     String
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+model Customization {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  productId Int      @map("product_id")
+  photoUrl  String   @map("photo_url")
+  photoKey  String   @map("photo_key")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+  orderItems OrderItem[]
+
+  @@index([userId])
+  @@map("customizations")
+}
+
+model Order {
+  id                    Int         @id @default(autoincrement())
+  orderNumber           String      @unique @map("order_number")
+  customerId            Int         @map("customer_id")
+  addressId             Int         @map("address_id")
+  status                OrderStatus @default(PENDING_PAYMENT)
+  subtotal              Decimal     @db.Decimal(10, 2)
+  shippingFee           Decimal     @map("shipping_fee") @db.Decimal(10, 2)
+  total                 Decimal     @db.Decimal(10, 2)
+  assignedDesignerId    Int?        @map("assigned_designer_id")
+  assignedPrinterId     Int?        @map("assigned_printer_id")
+  customerRevisionCount Int         @default(0) @map("customer_revision_count")
+  rejectReason          String?     @map("reject_reason")
+  cancelReason          String?     @map("cancel_reason")
+  createdAt             DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer         User                 @relation("OrderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  address          Address              @relation(fields: [addressId], references: [id], onDelete: Restrict)
+  assignedDesigner User?                @relation("OrderDesigner", fields: [assignedDesignerId], references: [id], onDelete: Restrict)
+  assignedPrinter  User?                @relation("OrderPrinter", fields: [assignedPrinterId], references: [id], onDelete: Restrict)
+  items            OrderItem[]
+  payments         Payment[]
+  designVersions   DesignVersion[]
+  printJob         PrintJob?
+  history          OrderStatusHistory[]
+  notifications    Notification[]
+
+  @@index([status])
+  @@index([customerId, createdAt])
+  @@index([assignedDesignerId, status])
+  @@index([assignedPrinterId, status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id              Int     @id @default(autoincrement())
+  orderId         Int     @map("order_id")
+  productId       Int     @map("product_id")
+  customizationId Int     @map("customization_id")
+  quantity        Int
+  unitPrice       Decimal @map("unit_price") @db.Decimal(10, 2)
+  lineTotal       Decimal @map("line_total") @db.Decimal(10, 2)
+
+  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+  customization Customization @relation(fields: [customizationId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Payment {
+  id                Int           @id @default(autoincrement())
+  orderId           Int           @map("order_id")
+  razorpayOrderId   String        @unique @map("razorpay_order_id")
+  razorpayPaymentId String?       @map("razorpay_payment_id")
+  amount            Decimal       @db.Decimal(10, 2)
+  status            PaymentStatus @default(PENDING)
+  refundId          String?       @map("refund_id")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status])
+  @@map("payments")
+}
+
+model PaymentEvent {
+  id              Int      @id @default(autoincrement())
+  razorpayEventId String   @unique @map("razorpay_event_id")
+  eventType       String   @map("event_type")
+  payload         Json
+  processedAt     DateTime @default(now()) @map("processed_at") @db.Timestamptz(3)
+
+  @@map("payment_events")
+}
+
+model DesignVersion {
+  id           Int                 @id @default(autoincrement())
+  orderId      Int                 @map("order_id")
+  designerId   Int                 @map("designer_id")
+  versionNo    Int                 @map("version_no")
+  fileUrl      String              @map("file_url")
+  fileKey      String              @map("file_key")
+  designerNote String?             @map("designer_note")
+  status       DesignVersionStatus @default(SUBMITTED)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order    Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  designer User           @relation(fields: [designerId], references: [id], onDelete: Restrict)
+  reviews  DesignReview[]
+
+  @@unique([orderId, versionNo])
+  @@index([orderId])
+  @@map("design_versions")
+}
+
+model DesignReview {
+  id              Int            @id @default(autoincrement())
+  designVersionId Int            @map("design_version_id")
+  reviewerId      Int            @map("reviewer_id")
+  reviewerRole    ReviewerRole   @map("reviewer_role")
+  decision        ReviewDecision
+  comment         String?
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  designVersion DesignVersion @relation(fields: [designVersionId], references: [id], onDelete: Cascade)
+  reviewer      User          @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([designVersionId])
+  @@map("design_reviews")
+}
+
+model PrintJob {
+  id           Int           @id @default(autoincrement())
+  orderId      Int           @unique @map("order_id")
+  printerId    Int           @map("printer_id")
+  color        MaterialColor
+  thicknessMm  Int           @map("thickness_mm")
+  size         SheetSize
+  stage        PrintStage    @default(ASSIGNED)
+  assignedById Int           @map("assigned_by_id")
+  notes        String?
+  startedAt    DateTime?     @map("started_at") @db.Timestamptz(3)
+  completedAt  DateTime?     @map("completed_at") @db.Timestamptz(3)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  order      Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  printer    User  @relation("PrintJobPrinter", fields: [printerId], references: [id], onDelete: Restrict)
+  assignedBy User  @relation("PrintJobAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@index([printerId, stage])
+  @@map("print_jobs")
+}
+
+model OrderStatusHistory {
+  id              Int          @id @default(autoincrement())
+  orderId         Int          @map("order_id")
+  fromStatus      OrderStatus? @map("from_status")
+  toStatus        OrderStatus  @map("to_status")
+  changedByUserId Int?         @map("changed_by_user_id")
+  note            String?
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  order         Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedByUser User? @relation(fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
+
+model Notification {
+  id        Int                 @id @default(autoincrement())
+  userId    Int                 @map("user_id")
+  orderId   Int?                @map("order_id")
+  type      String
+  title     String
+  message   String
+  channel   NotificationChannel @default(IN_APP)
+  status    NotificationStatus  @default(PENDING)
+  isRead    Boolean             @default(false) @map("is_read")
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
